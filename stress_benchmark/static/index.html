@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stress Monitor</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    /* ── Tokens ── */
+    :root {
+      --bg:        #0d1117;
+      --surface:   #161b22;
+      --border:    #21262d;
+      --text:      #e6edf3;
+      --muted:     #7d8590;
+      --accent:    #58a6ff;
+
+      --low:       #3fb950;   /* normal */
+      --mid:       #d29922;   /* monitor / rising */
+      --high:      #f85149;   /* persistent / critical */
+      --phy:       #a371f7;   /* physical activity */
+
+      --r: 8px;
+      --font: "Inter", "Segoe UI", system-ui, sans-serif;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px 16px 48px;
+    }
+
+    /* ── Layout ── */
+    .wrap { max-width: 960px; margin: auto; }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+    .logo {
+      width: 36px; height: 36px;
+      background: var(--accent);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+    }
+    header h1 { font-size: 1.25rem; font-weight: 600; letter-spacing: -.02em; }
+    header .sub { font-size: .8rem; color: var(--muted); margin-top: 2px; }
+
+    /* ── Upload card ── */
+    .upload-card {
+      border: 1.5px dashed var(--border);
+      border-radius: var(--r);
+      padding: 32px 24px;
+      text-align: center;
+      background: var(--surface);
+      transition: border-color .2s;
+      margin-bottom: 24px;
+    }
+    .upload-card.drag-over { border-color: var(--accent); }
+
+    .upload-card label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-size: .9rem;
+      color: var(--muted);
+    }
+    .upload-card label:hover { color: var(--text); }
+
+    #fileInput { display: none; }
+    #filename  { font-size: .85rem; color: var(--accent); margin: 10px 0 16px; min-height: 18px; }
+
+    .btn-analyze {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--accent);
+      color: #0d1117;
+      font-weight: 600;
+      font-size: .9rem;
+      border: none;
+      border-radius: 6px;
+      padding: 9px 20px;
+      cursor: pointer;
+      transition: opacity .15s;
+    }
+    .btn-analyze:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-analyze:not(:disabled):hover { opacity: .85; }
+
+    /* ── Spinner ── */
+    .spinner {
+      display: none;
+      width: 16px; height: 16px;
+      border: 2px solid #0d111740;
+      border-top-color: #0d1117;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Error banner ── */
+    .error-banner {
+      display: none;
+      background: #3d1a1a;
+      border: 1px solid #f8514940;
+      border-radius: var(--r);
+      padding: 12px 16px;
+      font-size: .85rem;
+      color: #f85149;
+      margin-bottom: 20px;
+    }
+
+    /* ── Results ── */
+    #results { display: none; }
+
+    /* ── Summary cards ── */
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 16px;
+    }
+    .stat-card .label { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }
+    .stat-card .value { font-size: 1.4rem; font-weight: 700; }
+    .stat-card .sub   { font-size: .78rem; color: var(--muted); margin-top: 3px; }
+
+    /* ── Alert banner ── */
+    .alert-banner {
+      border-radius: var(--r);
+      padding: 16px 20px;
+      margin-bottom: 24px;
+      border-left: 4px solid;
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+    }
+    .alert-banner .icon { font-size: 1.3rem; line-height: 1; }
+    .alert-banner .alert-title { font-weight: 600; font-size: .95rem; margin-bottom: 4px; }
+    .alert-banner .alert-rec   { font-size: .85rem; color: var(--muted); }
+
+    .alert-normal    { background: #12261e; border-color: var(--low);  }
+    .alert-monitor   { background: #2b2107; border-color: var(--mid);  }
+    .alert-stress    { background: #2a0e0d; border-color: var(--high); }
+    .alert-physical  { background: #1c1230; border-color: var(--phy);  }
+
+    /* ── Chart panel ── */
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .panel-title {
+      font-size: .8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+    .chart-wrap { position: relative; height: 260px; }
+
+    /* ── Timeline table ── */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+    th {
+      text-align: left;
+      padding: 8px 12px;
+      color: var(--muted);
+      font-size: .72rem;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      border-bottom: 1px solid var(--border);
+      font-weight: 500;
+    }
+    td {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #ffffff06; }
+
+    .badge {
+      display: inline-block;
+      font-size: .7rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 20px;
+    }
+    .badge-normal   { background: #12261e; color: var(--low);  }
+    .badge-monitor  { background: #2b2107; color: var(--mid);  }
+    .badge-stress   { background: #2a0e0d; color: var(--high); }
+    .badge-physical { background: #1c1230; color: var(--phy);  }
+
+    .conf-bar { width: 80px; height: 6px; background: var(--border); border-radius: 3px; display: inline-block; vertical-align: middle; margin-right: 6px; }
+    .conf-fill { height: 100%; border-radius: 3px; background: var(--accent); }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="logo">♥</div>
+    <div>
+      <h1>Stress Monitor</h1>
+      <div class="sub">Wearable sensor analysis · real-time stress detection</div>
+    </div>
+  </header>
+
+  <!-- Upload -->
+  <div class="upload-card" id="dropZone">
+    <label for="fileInput">
+      <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+        <path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M12 4v12M8 8l4-4 4 4"/>
+      </svg>
+      Drop a feature CSV here or <span style="color:var(--accent);margin-left:4px">browse file</span>
+    </label>
+    <input type="file" id="fileInput" accept=".csv" />
+    <div id="filename">No file selected</div>
+    <button class="btn-analyze" id="btnAnalyze" disabled onclick="uploadFile()">
+      <div class="spinner" id="spinner"></div>
+      <span id="btnLabel">Analyze</span>
+    </button>
+  </div>
+
+  <!-- Error -->
+  <div class="error-banner" id="errorBanner"></div>
+
+  <!-- Results -->
+  <div id="results">
+
+    <!-- Summary stats -->
+    <div class="summary-grid">
+      <div class="stat-card">
+        <div class="label">Windows Analyzed</div>
+        <div class="value" id="statWindows">—</div>
+        <div class="sub" id="statDuration">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Stress Rate</div>
+        <div class="value" id="statStressRate">—</div>
+        <div class="sub">windows with stress signal</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Avg Confidence</div>
+        <div class="value" id="statConf">—</div>
+        <div class="sub">model prediction confidence</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Peak State</div>
+        <div class="value" id="statPeak">—</div>
+        <div class="sub" id="statPeakSub">—</div>
+      </div>
+    </div>
+
+    <!-- Current alert -->
+    <div class="alert-banner" id="alertBanner">
+      <div class="icon" id="alertIcon"></div>
+      <div>
+        <div class="alert-title" id="alertTitle"></div>
+        <div class="alert-rec" id="alertRec"></div>
+      </div>
+    </div>
+
+    <!-- Stress level chart -->
+    <div class="panel">
+      <div class="panel-title">Stress Level Over Time</div>
+      <div class="chart-wrap"><canvas id="stressChart"></canvas></div>
+    </div>
+
+    <!-- Confidence chart -->
+    <div class="panel">
+      <div class="panel-title">Model Confidence Over Time</div>
+      <div class="chart-wrap"><canvas id="confChart"></canvas></div>
+    </div>
+
+    <!-- Timeline table -->
+    <div class="panel">
+      <div class="panel-title">Window-by-Window Report</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Time (s)</th>
+              <th>Stress Level</th>
+              <th>State</th>
+              <th>Confidence</th>
+              <th>Recommendation</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- /results -->
+</div><!-- /wrap -->
+
+<script>
+// ── Config ──────────────────────────────────────────────
+// Same origin (FastAPI serves this file): leave as ""
+// Running frontend separately (dev): set to "http://localhost:8000"
+const API_BASE = "http://localhost:8000";
+
+// ── State ───────────────────────────────────────────────
+let chartStress = null;
+let chartConf   = null;
+
+// ── File input ───────────────────────────────────────────
+const fileInput  = document.getElementById("fileInput");
+const btnAnalyze = document.getElementById("btnAnalyze");
+const dropZone   = document.getElementById("dropZone");
+
+fileInput.addEventListener("change", () => {
+  const f = fileInput.files[0];
+  document.getElementById("filename").textContent = f ? f.name : "No file selected";
+  btnAnalyze.disabled = !f;
+});
+
+dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("drag-over"); });
+dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
+dropZone.addEventListener("drop", e => {
+  e.preventDefault();
+  dropZone.classList.remove("drag-over");
+  const f = e.dataTransfer.files[0];
+  if (f && f.name.endsWith(".csv")) {
+    const dt = new DataTransfer();
+    dt.items.add(f);
+    fileInput.files = dt.files;
+    document.getElementById("filename").textContent = f.name;
+    btnAnalyze.disabled = false;
+  }
+});
+
+// ── Helpers ──────────────────────────────────────────────
+const STATE_META = {
+  normal:                 { label: "Normal",                  cls: "normal",   badge: "badge-normal",   icon: "✅", color: "#3fb950" },
+  low_confidence_normal:  { label: "Low Confidence — Normal", cls: "normal",   badge: "badge-normal",   icon: "🔵", color: "#58a6ff" },
+  monitor_more:           { label: "Monitor Closely",         cls: "monitor",  badge: "badge-monitor",  icon: "👁️", color: "#d29922" },
+  rising_stress:          { label: "Rising Stress",           cls: "stress",   badge: "badge-stress",   icon: "⚠️", color: "#f85149" },
+  persistent_stress:      { label: "Persistent Stress",       cls: "stress",   badge: "badge-stress",   icon: "🔴", color: "#f85149" },
+  critical_alert:         { label: "Critical Alert",          cls: "stress",   badge: "badge-stress",   icon: "🚨", color: "#f85149" },
+  physical_activity_delay:{ label: "Physical Activity",       cls: "physical", badge: "badge-physical", icon: "🏃", color: "#a371f7" },
+};
+
+const REC_LABEL = {
+  no_action:                        "No action needed — continue current activity.",
+  continue_monitoring:              "Continue monitoring — confidence is low, keep collecting data.",
+  measure_more_before_alert:        "Gathering more data before raising an alert.",
+  short_break_water_slow_breathing: "Take a short break, drink water, try slow breathing.",
+  stop_task_short_break_breathing_support: "Stop current task immediately. Take a break and use breathing support.",
+  delay_alert_keep_monitoring:      "Elevated activity detected — holding alert, continuing to monitor.",
+};
+
+function meta(state) {
+  return STATE_META[state] || { label: state, cls: "normal", badge: "badge-normal", icon: "❓", color: "#7d8590" };
+}
+function recLabel(rec) { return REC_LABEL[rec] || rec; }
+function pct(v) { return isFinite(v) ? Math.round(v * 100) + "%" : "—"; }
+function fmtTime(item, i) {
+  const t = item.window_start_sec ?? item.window_start_ts ?? i;
+  return isFinite(t) ? parseFloat(t).toFixed(0) + "s" : `#${i}`;
+}
+function stressLabel(v) {
+  if (v === 0) return "Low";
+  if (v === 1) return "Moderate";
+  return "High";
+}
+
+function setLoading(on) {
+  document.getElementById("spinner").style.display = on ? "block" : "none";
+  document.getElementById("btnLabel").textContent  = on ? "Analyzing…" : "Analyze";
+  btnAnalyze.disabled = on;
+}
+function showError(msg) {
+  const el = document.getElementById("errorBanner");
+  el.style.display = "block";
+  el.textContent = "Error: " + msg;
+}
+function clearError() { document.getElementById("errorBanner").style.display = "none"; }
+
+// ── Chart helpers ─────────────────────────────────────────
+const CHART_DEFAULTS = {
+  responsive: true,
+  maintainAspectRatio: false,
+  animation: { duration: 400 },
+  plugins: { legend: { display: false }, tooltip: { mode: "index", intersect: false } },
+  scales: {
+    x: { ticks: { color: "#7d8590", font: { size: 10 } }, grid: { color: "#21262d" } },
+    y: { ticks: { color: "#7d8590", font: { size: 10 } }, grid: { color: "#21262d" } },
+  },
+};
+
+function makeStressChart(labels, data, colors) {
+  if (chartStress) chartStress.destroy();
+  const ctx = document.getElementById("stressChart").getContext("2d");
+  chartStress = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [{
+        label: "Stress Level",
+        data,
+        borderColor: "#58a6ff",
+        backgroundColor: "transparent",
+        pointBackgroundColor: colors,
+        pointRadius: 5,
+        pointHoverRadius: 7,
+        borderWidth: 2,
+        stepped: "before",
+        tension: 0,
+      }],
+    },
+    options: {
+      ...CHART_DEFAULTS,
+      scales: {
+        ...CHART_DEFAULTS.scales,
+        y: { ...CHART_DEFAULTS.scales.y, min: 0, max: 2, ticks: { ...CHART_DEFAULTS.scales.y.ticks, stepSize: 1,
+          callback: v => ["Low", "Moderate", "High"][v] ?? v } },
+      },
+      plugins: {
+        ...CHART_DEFAULTS.plugins,
+        tooltip: {
+          callbacks: {
+            label: ctx => `Stress: ${stressLabel(ctx.parsed.y)}`,
+          }
+        }
+      }
+    },
+  });
+}
+
+function makeConfChart(labels, data) {
+  if (chartConf) chartConf.destroy();
+  const ctx = document.getElementById("confChart").getContext("2d");
+
+  // gradient fill
+  const gradient = ctx.createLinearGradient(0, 0, 0, 200);
+  gradient.addColorStop(0, "#58a6ff30");
+  gradient.addColorStop(1, "#58a6ff00");
+
+  chartConf = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [{
+        label: "Confidence",
+        data,
+        borderColor: "#58a6ff",
+        backgroundColor: gradient,
+        pointRadius: 3,
+        borderWidth: 2,
+        fill: true,
+        tension: 0.3,
+      }],
+    },
+    options: {
+      ...CHART_DEFAULTS,
+      scales: {
+        ...CHART_DEFAULTS.scales,
+        y: { ...CHART_DEFAULTS.scales.y, min: 0, max: 1,
+          ticks: { ...CHART_DEFAULTS.scales.y.ticks, callback: v => (v * 100).toFixed(0) + "%" } },
+      },
+      plugins: {
+        ...CHART_DEFAULTS.plugins,
+        tooltip: { callbacks: { label: ctx => `Confidence: ${pct(ctx.parsed.y)}` } }
+      }
+    },
+  });
+}
+
+// ── Build results UI ──────────────────────────────────────
+function renderResults(data) {
+  document.getElementById("results").style.display = "block";
+
+  const n = data.length;
+  const stressed = data.filter(d => d.adjusted_label >= 1).length;
+  const confs    = data.map(d => d.confidence).filter(v => isFinite(v));
+  const avgConf  = confs.length ? confs.reduce((a,b) => a+b, 0) / confs.length : NaN;
+  const latest   = data[n - 1];
+
+  // Severity ranking for "peak state"
+  const rankOrder = ["critical_alert","persistent_stress","rising_stress",
+                     "physical_activity_delay","monitor_more","low_confidence_normal","normal"];
+  const allStates = data.map(d => d.alert_state);
+  const peakState = rankOrder.find(s => allStates.includes(s)) ?? latest.alert_state;
+
+  // Summary cards
+  document.getElementById("statWindows").textContent    = n;
+  document.getElementById("statDuration").textContent   = fmtTime(data[0], 0) + " – " + fmtTime(data[n-1], n-1);
+  document.getElementById("statStressRate").textContent = pct(stressed / n);
+  document.getElementById("statConf").textContent       = pct(avgConf);
+  document.getElementById("statPeak").textContent       = meta(peakState).icon + " " + meta(peakState).label;
+  document.getElementById("statPeakSub").textContent    = "highest alert reached";
+
+  // Alert banner (latest window)
+  const m = meta(latest.alert_state);
+  const banner = document.getElementById("alertBanner");
+  banner.className = `alert-banner alert-${m.cls}`;
+  document.getElementById("alertIcon").textContent  = m.icon;
+  document.getElementById("alertTitle").textContent = `Current State: ${m.label}`;
+  document.getElementById("alertRec").textContent   = recLabel(latest.recommendation);
+
+  // Charts
+  const labels  = data.map((d,i) => fmtTime(d, i));
+  const levels  = data.map(d => d.adjusted_label);
+  const confArr = data.map(d => isFinite(d.confidence) ? d.confidence : null);
+  const pointColors = data.map(d => meta(d.alert_state).color);
+
+  makeStressChart(labels, levels, pointColors);
+  makeConfChart(labels, confArr);
+
+  // Table
+  const tbody = document.getElementById("tableBody");
+  tbody.innerHTML = "";
+  data.forEach((d, i) => {
+    const m = meta(d.alert_state);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td style="color:var(--muted)">${i + 1}</td>
+      <td>${fmtTime(d, i)}</td>
+      <td>${stressLabel(d.adjusted_label)}</td>
+      <td><span class="badge ${m.badge}">${m.label}</span></td>
+      <td>
+        <span class="conf-bar"><span class="conf-fill" style="width:${isFinite(d.confidence)?Math.round(d.confidence*100):0}%"></span></span>
+        ${pct(d.confidence)}
+      </td>
+      <td style="color:var(--muted)">${recLabel(d.recommendation)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // Scroll to results
+  document.getElementById("results").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// ── Upload & analyze ──────────────────────────────────────
+async function uploadFile() {
+  const file = fileInput.files[0];
+  if (!file) return;
+
+  clearError();
+  setLoading(true);
+  document.getElementById("results").style.display = "none";
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    const response = await fetch(`${API_BASE}/api/v1/analyze-file`, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try { const b = await response.json(); detail += `: ${b.detail ?? JSON.stringify(b)}`; } catch (_) {}
+      throw new Error(detail);
+    }
+
+    const data = await response.json();
+    if (!Array.isArray(data) || data.length === 0)
+      throw new Error("No data returned from the server.");
+
+    renderResults(data);
+
+  } catch (err) {
+    console.error(err);
+    showError(err.message);
+  } finally {
+    setLoading(false);
+    btnAnalyze.disabled = false;
+  }
+}
+</script>
+</body>
+</html>
